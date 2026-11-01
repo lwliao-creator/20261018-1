@@ -277,6 +277,11 @@
     .field textarea { min-height: 130px; resize: vertical; }
     .form-note { font-size: .82rem; color: var(--ink-soft); margin: 4px 0 20px; }
     .form-status { margin: 16px 0 0; font-size: .92rem; color: var(--accent-dark); min-height: 1.5em; }
+    .form-status.is-error { color: #b3261e; }
+    .form-status.is-success { color: #2e6b3f; }
+    .hp-field { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+    form { position: relative; }
+    button[disabled] { opacity: .6; cursor: wait; }
 
     /* =========================================
        10. 頁尾
@@ -515,7 +520,7 @@
         <div class="plans">
           <article class="plan">
             <h3>形象照方案</h3>
-            <p class="plan-price">NT$ 10,000 – 15,000</p>
+            <p class="plan-price">NT$ 6,000 – 15,000</p>
             <p class="plan-meta">交件時間：拍攝後 10 個工作天</p>
             <ul>
               <li>拍攝 1.5 – 3 小時，1 – 2 個場景</li>
@@ -530,7 +535,7 @@
           <article class="plan plan--featured">
             <span class="plan-badge">最多人選擇</span>
             <h3>婚紗攝影方案</h3>
-            <p class="plan-price">NT$ 24,000 – 38,000</p>
+            <p class="plan-price">NT$ 22,000 – 38,000</p>
             <p class="plan-meta">交件時間：拍攝後 30 個工作天</p>
             <ul>
               <li>拍攝 4 – 6 小時，2 – 3 個場景</li>
@@ -644,8 +649,13 @@
           </ul>
         </div>
 
-        <!-- 表單送出方式：目前用 JavaScript 示範，正式上線可改接 Formspree，見 README -->
-        <form id="inquiry-form" action="#" method="post" novalidate>
+        <!-- 表單送出後由 JavaScript 傳到 Google Apps Script：寫入 Google 試算表＋寄通知信（設定方式見 README） -->
+        <form id="inquiry-form" method="post" novalidate>
+          <!-- 防垃圾訊息的隱藏欄位：真人看不到也不會填，機器人常會填 -->
+          <div class="hp-field" aria-hidden="true">
+            <label for="website">請勿填寫此欄</label>
+            <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+          </div>
           <div class="form-row">
             <div class="field">
               <label for="name">姓名 <span class="req">*</span></label>
@@ -749,18 +759,61 @@
       groups.forEach(g => g.classList.toggle('is-hidden', f !== 'all' && g.dataset.category !== f));
     }));
 
-    // 詢問表單（示範版：檢查必填並顯示訊息）
+    // ===== 詢問表單 → Google 試算表 + Email 通知 =====
+    // 把下面的網址換成你部署 Google Apps Script 後拿到的「網頁應用程式網址」（結尾是 /exec）
+    const GAS_URL = 'https://script.google.com/macros/s/請貼上你的部署ID/exec';
+
     const form = document.getElementById('inquiry-form');
     const status = document.getElementById('form-status');
-    form.addEventListener('submit', (e) => {
+    const submitBtn = form.querySelector('button[type="submit"]');
+
+    function showStatus(msg, type) {
+      status.textContent = msg;
+      status.className = 'form-status' + (type ? ' is-' + type : '');
+    }
+
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!form.checkValidity()) {
-        status.textContent = '請填寫姓名、聯絡方式與拍攝類型。';
+        showStatus('請填寫姓名、聯絡方式與拍攝類型。', 'error');
         form.querySelector(':invalid').focus();
         return;
       }
-      status.textContent = '已收到你的詢問，我會在 1 – 2 個工作天內回覆，謝謝！';
-      form.reset();
+      if (GAS_URL.includes('請貼上')) {
+        showStatus('表單尚未設定完成（缺少 Google Apps Script 網址），請先來信 hello@xiaoke-photo.tw 詢問。', 'error');
+        console.warn('請在 index.html 設定 GAS_URL，步驟見 README.md');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = '送出中…';
+      showStatus('');
+
+      // 15 秒沒回應就視為失敗
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+
+      try {
+        // 用 URLSearchParams（application/x-www-form-urlencoded）送出，
+        // 屬於「簡單請求」，不會觸發 CORS 預檢，Apps Script 可用 e.parameter 讀取
+        const res = await fetch(GAS_URL, {
+          method: 'POST',
+          body: new URLSearchParams(new FormData(form)),
+          signal: controller.signal,
+        });
+        const result = await res.json();
+        if (!result.ok) throw new Error(result.error || '送出失敗');
+
+        showStatus('已收到你的詢問，我會在 1 – 2 個工作天內回覆，謝謝！', 'success');
+        form.reset();
+      } catch (err) {
+        console.error(err);
+        showStatus('送出失敗，可能是網路不穩。請稍後再試，或直接來信 hello@xiaoke-photo.tw。', 'error');
+      } finally {
+        clearTimeout(timer);
+        submitBtn.disabled = false;
+        submitBtn.textContent = '送出詢問';
+      }
     });
 
     document.getElementById('year').textContent = new Date().getFullYear();
